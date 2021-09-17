@@ -8,7 +8,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import relationship
 from flask_login import UserMixin, login_user, LoginManager, login_required, current_user, logout_user
-from forms import CreatePostForm, RegisterForm, LoginForm
+from forms import CreatePostForm, RegisterForm, LoginForm, CommentForm
 from flask_gravatar import Gravatar
 
 app = Flask(__name__)
@@ -21,6 +21,16 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///blog.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
+# This gives random avatar to the commenter.
+gravatar = Gravatar(app,
+                    size=100,
+                    rating='g',
+                    default='retro',
+                    force_default=False,
+                    force_lower=False,
+                    use_ssl=False,
+                    base_url=None)
+
 
 # CONFIGURE TABLES
 class User(UserMixin, db.Model):
@@ -30,6 +40,7 @@ class User(UserMixin, db.Model):
     password = db.Column(db.String(250), nullable=False)
     name = db.Column(db.String(250), nullable=False)
     posts = db.relationship("BlogPost", back_populates="author")
+    comments = db.relationship("Comment", back_populates="comment_author")
 
 
 class BlogPost(db.Model):
@@ -39,11 +50,26 @@ class BlogPost(db.Model):
     author_id = db.Column(db.Integer, db.ForeignKey("users.id"))
     author = db.relationship("User", back_populates="posts")
 
+    comments = db.relationship("Comment", back_populates="parent_post")
+
     title = db.Column(db.String(250), unique=True, nullable=False)
     subtitle = db.Column(db.String(250), nullable=False)
     date = db.Column(db.String(250), nullable=False)
     body = db.Column(db.Text, nullable=False)
     img_url = db.Column(db.String(250), nullable=False)
+
+
+class Comment(db.Model):
+    __tablename__ = "comments"
+    id = db.Column(db.Integer, primary_key=True)
+
+    author_id = db.Column(db.Integer, db.ForeignKey("users.id"))
+    comment_author = db.relationship("User", back_populates="comments")
+
+    post_id = db.Column(db.Integer, db.ForeignKey("blog_posts.id"))
+    parent_post = db.relationship("BlogPost", back_populates="comments")
+
+    text = db.Column(db.Text, nullable=False)
 
 
 db.create_all()
@@ -124,15 +150,33 @@ def login():
 
 
 @app.route('/logout')
+@login_required
 def logout():
     logout_user()
     return redirect(url_for('get_all_posts'))
 
 
-@app.route("/post/<int:post_id>")
+@app.route("/post/<int:post_id>", methods=["POST", "GET"])
 def show_post(post_id):
     requested_post = BlogPost.query.get(post_id)
-    return render_template("post.html", post=requested_post)
+    comment_form = CommentForm()
+    if comment_form.validate_on_submit():
+
+        # Checks if user is logged in to make a comment.
+        if not current_user.is_authenticated:
+            flash("Login first to register your comment. ")
+            return redirect(url_for("login"))
+
+        new_comment = Comment(
+            author_id=current_user.id,
+            post_id=post_id,
+            text=comment_form.comment.data,
+        )
+        db.session.add(new_comment)
+        db.session.commit()
+        return redirect(url_for("show_post", post_id=post_id))
+
+    return render_template("post.html", post=requested_post, comment_form=comment_form)
 
 
 @app.route("/about")
